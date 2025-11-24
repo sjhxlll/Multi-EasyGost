@@ -2,10 +2,44 @@
 Green_font_prefix="\033[32m" && Red_font_prefix="\033[31m" && Green_background_prefix="\033[42;37m" && Font_color_suffix="\033[0m"
 Info="${Green_font_prefix}[信息]${Font_color_suffix}"
 Error="${Red_font_prefix}[错误]${Font_color_suffix}"
-shell_version="1.1.1"
+shell_version="1.1.2" # 版本号微调
 ct_new_ver="2.11.2" # 2.x 不再跟随官方更新
 gost_conf_path="/etc/gost/config.json"
 raw_conf_path="/etc/gost/rawconf"
+
+# 写入 Systemd 服务文件
+function write_service_file() {
+cat > /usr/lib/systemd/system/gost.service <<EOF
+[Unit]
+Description=gost
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gost -C /etc/gost/config.json
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 777 /usr/lib/systemd/system/gost.service
+}
+
+# 写入初始配置文件
+function write_config_file() {
+mkdir -p /etc/gost
+cat > /etc/gost/config.json <<EOF
+{
+    "Debug": true,
+    "Retries": 0,
+    "ServeNodes": []
+}
+EOF
+chmod 777 /etc/gost/config.json
+}
+
 function checknew() {
   checknew=$(gost -V 2>&1 | awk '{print $2}')
   # check_new_ver
@@ -95,29 +129,39 @@ function Install_ct() {
   echo -e "若为国内机器建议使用大陆镜像加速下载"
   read -e -p "是否使用？[y/n]:" addyn
   [[ -z ${addyn} ]] && addyn="n"
+  
+  # 构建下载链接
   if [[ ${addyn} == [Yy] ]]; then
-    rm -rf gost-linux-"$bit"-"$ct_new_ver".gz
-    wget --no-check-certificate https://gotunnel.oss-cn-shenzhen.aliyuncs.com/gost-linux-"$bit"-"$ct_new_ver".gz
-    gunzip gost-linux-"$bit"-"$ct_new_ver".gz
-    mv gost-linux-"$bit"-"$ct_new_ver" gost
-    mv gost /usr/bin/gost
-    chmod -R 777 /usr/bin/gost
-    wget --no-check-certificate https://gotunnel.oss-cn-shenzhen.aliyuncs.com/gost.service && chmod -R 777 gost.service && mv gost.service /usr/lib/systemd/system
-    mkdir /etc/gost && wget --no-check-certificate https://gotunnel.oss-cn-shenzhen.aliyuncs.com/config.json && mv config.json /etc/gost && chmod -R 777 /etc/gost
+    # 使用 ghproxy 代理下载 GitHub Release
+    download_url="https://ghproxy.xomoe.cn/https://github.com/ginuerzh/gost/releases/download/v${ct_new_ver}/gost-linux-${bit}-${ct_new_ver}.gz"
   else
-    rm -rf gost-linux-"$bit"-"$ct_new_ver".gz
-    wget --no-check-certificate https://github.com/ginuerzh/gost/releases/download/v"$ct_new_ver"/gost-linux-"$bit"-"$ct_new_ver".gz
-    gunzip gost-linux-"$bit"-"$ct_new_ver".gz
-    mv gost-linux-"$bit"-"$ct_new_ver" gost
-    mv gost /usr/bin/gost
-    chmod -R 777 /usr/bin/gost
-    wget --no-check-certificate https://raw.githubusercontent.com/KANIKIG/Multi-EasyGost/master/gost.service && chmod -R 777 gost.service && mv gost.service /usr/lib/systemd/system
-    mkdir /etc/gost && wget --no-check-certificate https://raw.githubusercontent.com/KANIKIG/Multi-EasyGost/master/config.json && mv config.json /etc/gost && chmod -R 777 /etc/gost
+    # 直接下载 GitHub Release
+    download_url="https://github.com/ginuerzh/gost/releases/download/v${ct_new_ver}/gost-linux-${bit}-${ct_new_ver}.gz"
   fi
 
+  echo -e "${Info} 正在下载 Gost v${ct_new_ver} ..."
+  rm -rf gost-linux-"$bit"-"$ct_new_ver".gz
+  wget --no-check-certificate -O gost-linux-"$bit"-"$ct_new_ver".gz "$download_url"
+
+  if [[ ! -f "gost-linux-${bit}-${ct_new_ver}.gz" ]]; then
+     echo -e "${Error} 下载失败，请检查网络连接。"
+     exit 1
+  fi
+
+  gunzip gost-linux-"$bit"-"$ct_new_ver".gz
+  mv gost-linux-"$bit"-"$ct_new_ver" gost
+  mv gost /usr/bin/gost
+  chmod -R 777 /usr/bin/gost
+  
+  # 直接生成配置文件，不再依赖外部下载
+  echo -e "${Info} 正在配置系统服务..."
+  write_service_file
+  write_config_file
+
+  systemctl daemon-reload
   systemctl enable gost && systemctl restart gost
   echo "------------------------------"
-  if test -a /usr/bin/gost -a /usr/lib/systemctl/gost.service -a /etc/gost/config.json; then
+  if test -a /usr/bin/gost -a /usr/lib/systemd/system/gost.service -a /etc/gost/config.json; then
     echo "gost安装成功"
     rm -rf "$(pwd)"/gost
     rm -rf "$(pwd)"/gost.service
@@ -131,10 +175,13 @@ function Install_ct() {
   fi
 }
 function Uninstall_ct() {
+  systemctl stop gost
+  systemctl disable gost
   rm -rf /usr/bin/gost
   rm -rf /usr/lib/systemd/system/gost.service
   rm -rf /etc/gost
   rm -rf "$(pwd)"/gost.sh
+  systemctl daemon-reload
   echo "gost已经成功删除"
 }
 function Start_ct() {
@@ -872,26 +919,8 @@ cron_restart() {
 }
 
 update_sh() {
-  ol_version=$(curl -L -s --connect-timeout 5 https://raw.githubusercontent.com/KANIKIG/Multi-EasyGost/master/gost.sh | grep "shell_version=" | head -1 | awk -F '=|"' '{print $3}')
-  if [ -n "$ol_version" ]; then
-    if [[ "$shell_version" != "$ol_version" ]]; then
-      echo -e "存在新版本，是否更新 [Y/N]?"
-      read -r update_confirm
-      case $update_confirm in
-      [yY][eE][sS] | [yY])
-        wget -N --no-check-certificate https://raw.githubusercontent.com/KANIKIG/Multi-EasyGost/master/gost.sh
-        echo -e "更新完成"
-        exit 0
-        ;;
-      *) ;;
-
-      esac
-    else
-      echo -e "                 ${Green_font_prefix}当前版本为最新版本！${Font_color_suffix}"
-    fi
-  else
-    echo -e "                 ${Red_font_prefix}脚本最新版本获取失败，请检查与github的连接！${Font_color_suffix}"
-  fi
+    # 移除了自动更新检查，因为原仓库可能不再维护或结构已变，避免覆盖当前修复版
+    echo -e "                 ${Green_font_prefix}已跳过更新检查，使用本地修复版本。${Font_color_suffix}"
 }
 
 update_sh
