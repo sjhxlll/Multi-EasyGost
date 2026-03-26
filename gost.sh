@@ -133,7 +133,7 @@ function Install_ct() {
   # 构建下载链接
   if [[ ${addyn} == [Yy] ]]; then
     # 使用 ghproxy 代理下载 GitHub Release
-    download_url="https://ghproxy.xomoe.cn/https://github.com/ginuerzh/gost/releases/download/v${ct_new_ver}/gost-linux-${bit}-${ct_new_ver}.gz"
+    download_url="https://ws.bxcc.de/https://github.com/ginuerzh/gost/releases/download/v${ct_new_ver}/gost-linux-${bit}-${ct_new_ver}.gz"
   else
     # 直接下载 GitHub Release
     download_url="https://github.com/ginuerzh/gost/releases/download/v${ct_new_ver}/gost-linux-${bit}-${ct_new_ver}.gz"
